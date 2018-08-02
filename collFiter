@@ -1,0 +1,104 @@
+# Databricks notebook source
+# MAGIC %run /Users/antonina.danylenko@nentgroup.com/cf/conf
+
+# COMMAND ----------
+
+# MAGIC %run /Users/antonina.danylenko@nentgroup.com/cf/cleaning
+
+# COMMAND ----------
+
+# MAGIC %run /Users/antonina.danylenko@nentgroup.com/cf/als
+
+# COMMAND ----------
+
+import numpy
+import math
+import time
+import threading
+from boto.s3.key import Key
+from datetime import date, datetime
+from numpy.linalg import norm
+from pyspark import SparkContext, SparkConf
+from pyspark.mllib.recommendation import ALS, Rating
+from scipy.spatial.distance import chebyshev, cosine
+from scipy.stats import entropy
+import json
+
+
+"""
+For a thorough documentation of the functions, refer to the seperate markdown
+document "ensemble.md".
+"""
+
+def get_logger(sc):
+    return sc._jvm.org.apache.log4j.LogManager.getLogger('[RECOMMENDATIONS-EMR][ENSEMBLE]')
+  
+def read_input_viewing_data(configurations):
+    return sc.textFile(configurations['read']['rawData'])
+
+def read_program_feed_from_s3(conf):
+    name = conf['read']['programFeed']
+    with open(name, 'r') as f:
+        js = json.load(f)
+    return js  
+
+def ensemble(configurations):
+    input_viewing_data = read_input_viewing_data(configurations)
+    program_feed = read_program_feed_from_s3(configurations)
+    
+    print 'cleaning starts'
+    preprocessed_datasets = clean_data(configurations, input_viewing_data, program_feed)
+    print 'cleaning finished'
+    
+    print 'create_als_dict starts'
+    children_als = precalculate_als_data(configurations, preprocessed_datasets['children'])
+    regular_als = precalculate_als_data(configurations, preprocessed_datasets['regular'])
+    print 'create_als_dict finished'
+    
+    folders = ["children", "regular"]
+    i = 0
+    for als_data in [children_als, regular_als]:
+        folder = folders[i]
+        i = i+1
+        log.info('rank_and_save_als_data starts')
+        rank_and_save_als_data(configurations,
+            products_available = als_data['s3']['prods']['available'],
+            features = als_data['ensemble']['als'],
+            suffix = als_data['s3']['saveSuffix'],
+                               folder_name=folder
+        )
+     
+    
+    print 'rank_and_save_als_data finished'
+    
+    
+
+
+
+configurations = read_configuration()
+sc.setCheckpointDir('dbfs:/databricks/cf/tmp')
+
+log = get_logger(sc)
+log.info('ensemble starts')
+ensemble(configurations)
+log.info('ensemble finished')
+
+
+# COMMAND ----------
+
+# MAGIC %sh
+# MAGIC ls /dbfs/mnt/tonja/output
+
+# COMMAND ----------
+
+file = open("/dbfs/databricks/cf/similar-titles/test.txt", 'w+') 
+file.write("Hello!") 
+file.close() 
+
+# COMMAND ----------
+
+# MAGIC %sh
+# MAGIC less /dbfs/antonina/output/cf/children/recommendations/part-00000
+
+# COMMAND ----------
+
